@@ -1,0 +1,130 @@
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:15-alpine
+    container_name: user-registration-db
+    environment:
+      POSTGRES_DB: user_registration
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - app-network
+
+  # Redis (Celery broker and result backend)
+  redis:
+    image: redis:7-alpine
+    container_name: user-registration-redis
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - app-network
+
+  # Mailhog (SMTP testing server with web UI)
+  mailhog:
+    image: mailhog/mailhog:latest
+    container_name: user-registration-mailhog
+    ports:
+      - "1025:1025"  # SMTP server
+      - "8025:8025"  # Web UI
+    networks:
+      - app-network
+    # Decision: Mailhog provides a clean web UI for viewing test emails
+    # Access at http://localhost:8025 to see all activation codes
+
+  # FastAPI Application
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: user-registration-api
+    environment:
+      - DATABASE_HOST=postgres
+      - DATABASE_PORT=5432
+      - DATABASE_NAME=user_registration
+      - DATABASE_USER=postgres
+      - DATABASE_PASSWORD=postgres
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+      - SMTP_HOST=mailhog
+      - SMTP_PORT=1025
+      - LOG_LEVEL=INFO
+      - API_HOST=0.0.0.0
+      - API_PORT=8000
+      - ENABLE_METRICS=${ENABLE_METRICS:-true}
+      - ENABLE_RATE_LIMITING=${ENABLE_RATE_LIMITING:-true}
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      mailhog:
+        condition: service_started
+    networks:
+      - app-network
+    command: gunicorn -c gunicorn_conf.py src.main:app
+    # Decision: Using Gunicorn + Uvicorn workers for production-grade deployment
+    # - Process management and worker health monitoring
+    # - Graceful shutdowns (zero-downtime deployments)
+    # - Auto-restart crashed workers
+    # - Configuration managed in gunicorn_conf.py
+
+  # Celery Worker (for async email sending)
+  celery-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: user-registration-celery
+    environment:
+      - DATABASE_HOST=postgres
+      - DATABASE_PORT=5432
+      - DATABASE_NAME=user_registration
+      - DATABASE_USER=postgres
+      - DATABASE_PASSWORD=postgres
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+      - SMTP_HOST=mailhog
+      - SMTP_PORT=1025
+      - LOG_LEVEL=INFO
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      mailhog:
+        condition: service_started
+    networks:
+      - app-network
+    command: celery -A src.infrastructure.tasks.celery_config worker --loglevel=info
+    # Decision: Celery worker runs as a separate container for:
+    # 1. Independent scaling (can run multiple workers)
+    # 2. Isolation (worker crashes don't affect API)
+    # 3. Resource management (separate CPU/memory limits)
+
+networks:
+  app-network:
+    driver: bridge
+
+volumes:
+  postgres_data:
+    # Persist database data across container restarts
+    # Decision: Using named volumes for data persistence

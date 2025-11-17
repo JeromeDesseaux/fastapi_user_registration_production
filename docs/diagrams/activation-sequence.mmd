@@ -1,0 +1,86 @@
+sequenceDiagram
+    participant Client
+    participant RateLimitMW as Rate Limit Middleware
+    participant MetricsMW as Metrics Middleware
+    participant API as FastAPI Route
+    participant Auth as Basic Auth Dependency
+    participant UC as ActivateUserUseCase
+    participant User as User Entity
+    participant Repo as PostgresUserRepository
+    participant DB as PostgreSQL
+    participant Redis
+
+    Client->>RateLimitMW: POST /api/v1/users/activate<br/>Authorization: Basic xxx<br/>{"activation_code": "1234"}
+
+    Note over RateLimitMW: Check rate limit<br/>3 attempts/min per email
+    RateLimitMW->>Redis: ZREMRANGEBYSCORE + ZCARD<br/>(check attempts count)
+    Redis-->>RateLimitMW: Allowed (under limit)
+
+    RateLimitMW->>MetricsMW: Forward request
+    Note over MetricsMW: Start timing request
+
+    MetricsMW->>API: Forward request
+    API->>Auth: Verify Basic Auth credentials
+
+    Note over Auth: Extract email and password<br/>from Authorization header
+    Auth->>Repo: find_by_email(email)
+    Repo->>DB: SELECT * FROM users WHERE email = $1
+    DB-->>Repo: User data
+    Repo-->>Auth: User entity
+
+    Auth->>User: verify_password(password)
+    Note over User: bcrypt.checkpw()<br/>Compare hashed password
+    User-->>Auth: Password valid ✓
+    Auth-->>API: Credentials verified (email, password)
+
+    API->>UC: execute(email, password, activation_code)
+    UC->>Repo: find_by_email(email)
+    Repo->>DB: SELECT * FROM users WHERE email = $1
+    DB-->>Repo: User data with activation_code
+    Repo-->>UC: User entity
+
+    UC->>User: activate(activation_code)
+
+    Note over User: 1. Verify code matches<br/>2. Check not expired (60s)<br/>3. Check not already activated
+
+    alt Code valid and not expired
+        User->>User: Set is_activated = True<br/>Set activated_at = now()<br/>Clear activation_code
+        User-->>UC: Activation successful
+
+        UC->>Repo: save(user)
+        Repo->>DB: UPDATE users SET<br/>is_activated = true,<br/>activated_at = now()<br/>WHERE id = $1
+        DB-->>Repo: Updated
+        Repo-->>UC: User saved
+
+        UC-->>API: Success
+        API-->>MetricsMW: 200 OK<br/>{"email": "...", "is_activated": true}
+
+        Note over MetricsMW: Calculate duration<br/>Store metrics in Redis
+        MetricsMW->>Redis: HINCRBY request_counts<br/>ZADD latencies<br/>HINCRBY business:activations
+
+        MetricsMW-->>RateLimitMW: Response + duration
+        RateLimitMW-->>Client: 200 OK<br/>X-RateLimit-Remaining: 2
+
+    else Code invalid
+        User-->>UC: InvalidActivationCodeError
+        UC-->>API: 400 Bad Request
+        API-->>MetricsMW: 400 Bad Request
+        MetricsMW->>Redis: Record error metrics
+        MetricsMW-->>Client: 400 Bad Request
+
+    else Code expired
+        User-->>UC: ActivationCodeExpiredError
+        UC-->>API: 410 Gone
+        API-->>MetricsMW: 410 Gone
+        MetricsMW->>Redis: Record error metrics
+        MetricsMW-->>Client: 410 Gone<br/>{"error": "Code expired"}
+
+    else Already activated
+        User-->>UC: UserAlreadyActivatedError
+        UC-->>API: 409 Conflict
+        API-->>MetricsMW: 409 Conflict
+        MetricsMW->>Redis: Record error metrics
+        MetricsMW-->>Client: 409 Conflict
+    end
+
+    Note over Client,Redis: Key Design Decisions:<br/>1. Basic Auth for simple authentication<br/>2. Rate limit per email (3/min) prevents brute force<br/>3. 60-second code expiry for security<br/>4. Metrics track activation success/failure

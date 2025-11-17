@@ -1,0 +1,52 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+
+# Virtual environments
+venv/
+env/
+ENV/
+.venv/
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+# tests/ - Need to include tests for running in container
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# Git
+.git/
+.gitignore
+
+# Documentation
+*.md
+!README.md
+
+# Docker
+Dockerfile
+docker-compose.yml
+.dockerignore
+
+# Pre-commit
+.pre-commit-config.yaml
+.pre-commit-hooks/
+.secrets.baseline
+
+# Poetry (exclude local poetry files, but keep pyproject.toml and poetry.lock)
+poetry.toml
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log

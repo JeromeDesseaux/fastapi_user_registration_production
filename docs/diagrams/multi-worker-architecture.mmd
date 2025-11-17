@@ -1,0 +1,65 @@
+graph TB
+    subgraph "Load Balancing Layer"
+        LB[Load Balancer /<br/>Reverse Proxy<br/>nginx/HAProxy]
+    end
+
+    subgraph "API Container - Gunicorn Process Management"
+        Master[Gunicorn Master Process<br/>PID 1<br/><br/>Responsibilities:<br/>• Manage worker lifecycle<br/>• Graceful reloads SIGHUP<br/>• Worker health monitoring<br/>• Auto-restart on crash]
+
+        subgraph "Worker Pool - (2 × CPU) + 1"
+            W1[Uvicorn Worker 1<br/>FastAPI App Instance<br/><br/>Max requests: 1000<br/>then restart]
+            W2[Uvicorn Worker 2<br/>FastAPI App Instance<br/><br/>Max requests: 1000<br/>then restart]
+            W3[Uvicorn Worker 3<br/>FastAPI App Instance<br/><br/>Max requests: 1000<br/>then restart]
+            W4[Uvicorn Worker 4<br/>FastAPI App Instance<br/><br/>Max requests: 1000<br/>then restart]
+        end
+    end
+
+    subgraph "Shared State - Redis"
+        RMetrics[Metrics Storage<br/>HASH: request_counts<br/>HASH: status_counts<br/>ZSET: latencies<br/>HASH: business_metrics]
+        RRateLimit[Rate Limiting<br/>ZSET: rate_limit_windows<br/>Per IP, per email<br/>Sliding window]
+        RCelery[Celery Broker<br/>Task queue<br/>Email tasks]
+    end
+
+    subgraph "Shared Data - PostgreSQL"
+        DB[User Database<br/>Connection Pool<br/>min=1, max=10 per worker]
+    end
+
+    LB -->|Round-robin<br/>HTTP requests| Master
+    Master -->|Manages| W1
+    Master -->|Manages| W2
+    Master -->|Manages| W3
+    Master -->|Manages| W4
+
+    W1 -->|Write metrics| RMetrics
+    W2 -->|Write metrics| RMetrics
+    W3 -->|Write metrics| RMetrics
+    W4 -->|Write metrics| RMetrics
+
+    W1 -->|Check rate limits| RRateLimit
+    W2 -->|Check rate limits| RRateLimit
+    W3 -->|Check rate limits| RRateLimit
+    W4 -->|Check rate limits| RRateLimit
+
+    W1 -->|Enqueue emails| RCelery
+    W2 -->|Enqueue emails| RCelery
+    W3 -->|Enqueue emails| RCelery
+    W4 -->|Enqueue emails| RCelery
+
+    W1 -->|asyncpg pool| DB
+    W2 -->|asyncpg pool| DB
+    W3 -->|asyncpg pool| DB
+    W4 -->|asyncpg pool| DB
+
+    style Master fill:#FF6B6B,stroke:#333,stroke-width:3px
+    style W1 fill:#4ECDC4
+    style W2 fill:#4ECDC4
+    style W3 fill:#4ECDC4
+    style W4 fill:#4ECDC4
+    style RMetrics fill:#FFE66D
+    style RRateLimit fill:#FFE66D
+    style RCelery fill:#FFE66D
+    style DB fill:#95E1D3
+
+    note1[Key Design Decisions:<br/>1. Worker count formula optimized for I/O-bound workload<br/>2. Max requests prevents memory leaks<br/>3. Redis solves multi-worker state sharing<br/>4. Connection pools per worker limit DB connections]
+
+    note2[Worker Lifecycle:<br/>1. Master spawns workers on startup<br/>2. Each worker processes requests independently<br/>3. After 1000 requests worker gracefully exits<br/>4. Master spawns new worker to replace it<br/>5. On SIGHUP: graceful reload without downtime]

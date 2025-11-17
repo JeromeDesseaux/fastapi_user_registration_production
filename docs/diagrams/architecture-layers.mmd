@@ -1,0 +1,70 @@
+graph TB
+    subgraph "Presentation Layer"
+        Middleware[Middleware Stack<br/>Rate Limit + Metrics]
+        Routes[FastAPI Routes]
+        Schemas[Pydantic Schemas]
+        Deps[Dependencies]
+    end
+
+    subgraph "Application Layer"
+        RegUC[RegisterUserUseCase]
+        ActUC[ActivateUserUseCase]
+        EmailService[EmailService Port]
+    end
+
+    subgraph "Domain Layer"
+        User[User Entity]
+        ActCode[ActivationCode]
+        Exceptions[Domain Exceptions]
+        Ports[Repository Ports]
+    end
+
+    subgraph "Infrastructure Layer"
+        subgraph "Data Access"
+            PostgresRepo[PostgresUserRepository]
+            Connection[Database Connection Pool]
+        end
+        subgraph "External Services"
+            SmtpEmail[SmtpEmailService]
+            CeleryTasks[Celery Email Tasks]
+        end
+        subgraph "Observability"
+            MetricsStorage[RedisMetricsStorage]
+            RateLimiter[RedisRateLimiter]
+        end
+    end
+
+    Middleware --> Routes
+    Routes --> RegUC
+    Routes --> ActUC
+    Routes --> Deps
+
+    Middleware -.->|uses| RateLimiter
+    Middleware -.->|uses| MetricsStorage
+
+    RegUC --> User
+    RegUC --> Ports
+    RegUC --> EmailService
+    ActUC --> User
+    ActUC --> Ports
+
+    Ports --> PostgresRepo
+    EmailService --> CeleryTasks
+    CeleryTasks --> SmtpEmail
+
+    PostgresRepo --> Connection
+    Connection --> DB[(PostgreSQL)]
+    CeleryTasks --> RedisQueue[(Redis<br/>Task Queue)]
+    MetricsStorage --> RedisMetrics[(Redis<br/>Metrics)]
+    RateLimiter --> RedisRL[(Redis<br/>Rate Limits)]
+    SmtpEmail --> SMTP[SMTP Server]
+
+    style Middleware fill:#FF6B6B
+    style MetricsStorage fill:#4ECDC4
+    style RateLimiter fill:#FF6B6B
+    style RedisMetrics fill:#FFE66D
+    style RedisRL fill:#FFE66D
+    style RedisQueue fill:#FFE66D
+
+    note1[Note: Middleware operates at<br/>presentation layer,<br/>uses infrastructure services]
+    note2[Note: Redis shared for<br/>3 purposes: Tasks,<br/>Metrics, Rate Limits]

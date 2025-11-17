@@ -1,0 +1,9 @@
+Hi,
+
+Your activation code is: {{ code }}
+
+This code will expire in {{ expiry_seconds }} seconds.
+Please use it to activate your Dailymotion account.
+
+Thank you!
+The Dailymotion Team

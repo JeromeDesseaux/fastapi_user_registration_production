@@ -1,0 +1,131 @@
+[tool.poetry]
+name = "user-registration-api"
+version = "1.0.0"
+description = "User Registration API with email verification - Dailymotion Technical Test"
+authors = ["Jerome"]
+package-mode = false
+
+[tool.poetry.dependencies]
+python = "^3.11"
+# Web Framework
+fastapi = "0.109.0"
+uvicorn = {extras = ["standard"], version = "0.27.0"}
+gunicorn = "21.2.0"
+python-multipart = "0.0.6"
+# Task Queue
+celery = "5.3.6"
+redis = "5.0.1"
+# Database
+asyncpg = "0.29.0"
+# Security
+bcrypt = "4.1.2"
+python-jose = {extras = ["cryptography"], version = "3.3.0"}
+# Email
+aiosmtplib = "3.0.1"
+# Utilities
+pydantic = "2.5.3"
+pydantic-settings = "2.1.0"
+email-validator = "^2.2.0"
+python-dotenv = "1.0.0"
+jinja2 = "3.1.2"
+
+[tool.poetry.group.dev.dependencies]
+# Testing
+pytest = "7.4.4"
+pytest-asyncio = "0.23.3"
+pytest-cov = "4.1.0"
+behave = "1.2.6"
+httpx = "0.26.0"
+# Linting & Formatting
+ruff = "^0.8.0"
+mypy = "1.8.0"
+# Type stubs for mypy
+types-redis = "^4.6.0"
+# Pre-commit
+pre-commit = "^3.6.0"
+
+[tool.ruff]
+# Decision: Ruff is a modern, fast linter and formatter (10-100x faster than black+flake8)
+# It combines the functionality of black, flake8, isort, pyupgrade, and more
+line-length = 100
+target-version = "py311"
+src = ["src", "tests"]
+fix = true
+show-fixes = true
+
+# Exclude common directories
+exclude = [
+    ".git",
+    ".venv",
+    ".pytest_cache",
+    "__pycache__",
+    "*.egg-info",
+]
+
+[tool.ruff.lint]
+# Enable specific rule sets
+# E/F: pycodestyle errors and pyflakes
+# I: isort (import sorting)
+# N: pep8-naming
+# UP: pyupgrade (modernize Python syntax)
+# B: flake8-bugbear (find likely bugs)
+# C4: flake8-comprehensions (better comprehensions)
+# SIM: flake8-simplify (simplify code)
+# RUF: Ruff-specific rules
+select = ["E", "F", "I", "N", "UP", "B", "C4", "SIM", "RUF"]
+
+# Ignore specific rules that conflict with formatter or are too strict
+ignore = [
+    "E501",  # Line too long (handled by formatter)
+    "B008",  # Function calls in argument defaults (FastAPI Depends pattern)
+    "UP007", # Use X | Y for type annotations (not always preferred)
+]
+
+[tool.ruff.format]
+# Decision: Use black-compatible formatting for consistency
+quote-style = "double"
+indent-style = "space"
+skip-magic-trailing-comma = false
+line-ending = "auto"
+
+[tool.ruff.lint.isort]
+known-first-party = ["src"]
+section-order = ["future", "standard-library", "third-party", "first-party", "local-folder"]
+
+[tool.mypy]
+python_version = "3.11"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+ignore_missing_imports = true
+# Additional strict checks for Staff Engineer quality
+warn_redundant_casts = true
+warn_unused_ignores = true
+strict_optional = true
+check_untyped_defs = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests/unit", "tests/integration"]
+python_files = "test_*.py"
+python_classes = "Test*"
+python_functions = "test_*"
+asyncio_mode = "auto"
+addopts = "-v --cov=src --cov-report=term-missing"
+# Markers for organizing tests
+markers = [
+    "unit: Unit tests (fast, isolated)",
+    "integration: Integration tests (API + database + mocks)",
+]
+
+[tool.coverage.run]
+source = ["src"]
+omit = ["*/tests/*", "*/__init__.py"]
+
+[tool.bandit]
+# Security scanner configuration
+exclude_dirs = ["/tests"]
+skips = ["B101"]  # Skip assert_used check (used in tests)
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"

@@ -1,0 +1,40 @@
+graph TB
+    subgraph "Docker Compose Environment"
+        subgraph "API Services"
+            API[API Container<br/>Gunicorn Master<br/>4x Uvicorn Workers<br/>Port 8000<br/><br/>Endpoints:<br/>/api/v1/users/*<br/>/api/v1/health<br/>/api/v1/metrics]
+            Worker[Celery Worker Container<br/>Email Processing<br/>Async Tasks]
+        end
+
+        subgraph "Data Services"
+            Postgres[PostgreSQL Container<br/>Port 5432<br/>Volume: postgres_data<br/><br/>User Data Storage]
+            Redis[Redis Container<br/>Port 6379<br/><br/>1. Celery Broker<br/>2. Metrics Storage<br/>3. Rate Limiting]
+        end
+
+        subgraph "Development Tools"
+            Mailhog[Mailhog Container<br/>SMTP Server + Web UI<br/>Ports 1025, 8025<br/><br/>Email Testing]
+        end
+    end
+
+    Client[Client Browser] -->|HTTP :8000| API
+    Client -->|GET /metrics| API
+    Client -->|View Emails :8025| Mailhog
+
+    API -->|asyncpg<br/>User CRUD| Postgres
+    API -->|Enqueue Email Tasks| Redis
+    API -->|Store Metrics<br/>HASH, ZSET| Redis
+    API -->|Check Rate Limits<br/>Sliding Window| Redis
+
+    Worker -->|Consume Email Tasks| Redis
+    Worker -->|Read User Data| Postgres
+    Worker -->|Send Emails| Mailhog
+
+    style API fill:#4A90E2
+    style Worker fill:#4A90E2
+    style Postgres fill:#336791
+    style Redis fill:#DC382D
+    style Mailhog fill:#6B8E23
+
+    classDef noteStyle fill:#FFF8DC,stroke:#DAA520,stroke-width:2px
+
+    note1[Note: Redis serves 3 purposes<br/>for efficient resource usage]:::noteStyle
+    note2[Note: 4 workers = 2×CPU+1<br/>for I/O-bound workload]:::noteStyle

@@ -1,0 +1,64 @@
+graph TB
+    subgraph "Request Flow"
+        Client[HTTP Client] --> RateLimit[Rate Limit Middleware<br/>Check ZSET count]
+        RateLimit --> Metrics[Metrics Middleware<br/>Start timer]
+        Metrics --> Handler[Route Handler<br/>Business Logic]
+        Handler --> Metrics2[Metrics Middleware<br/>Record duration]
+        Metrics2 --> Response[HTTP Response<br/>+ Rate Limit Headers]
+    end
+
+    subgraph "Redis Metrics Storage - Shared Across All Workers"
+        direction TB
+        RequestCounts[Request Counts<br/>HASH<br/>endpoint → count]
+        StatusCounts[Status Counts<br/>HASH<br/>status_code → count]
+        BusinessMetrics[Business Metrics<br/>HASH<br/>registrations, activations]
+        Latencies[Latencies<br/>ZSET<br/>timestamp:duration]
+        ErrorCount[Error Count<br/>KEY<br/>total errors]
+    end
+
+    subgraph "Rate Limiting Storage"
+        RateLimitKeys[Rate Limit Windows<br/>ZSET<br/>request_id → timestamp]
+    end
+
+    subgraph "Multi-Worker Aggregation"
+        Worker1[Worker 1] -.->|writes| RequestCounts
+        Worker2[Worker 2] -.->|writes| RequestCounts
+        Worker3[Worker 3] -.->|writes| RequestCounts
+        Worker4[Worker 4] -.->|writes| RequestCounts
+    end
+
+    RateLimit -->|ZREMRANGEBYSCORE<br/>ZCARD, ZADD| RateLimitKeys
+    Metrics2 -->|HINCRBY| RequestCounts
+    Metrics2 -->|HINCRBY| StatusCounts
+    Metrics2 -->|HINCRBY| BusinessMetrics
+    Metrics2 -->|ZADD, ZREMRANGEBYRANK| Latencies
+    Metrics2 -->|INCR| ErrorCount
+
+    subgraph "Metrics API Endpoint"
+        MetricsEndpoint[GET /api/v1/metrics] -->|HGETALL, ZRANGE<br/>Aggregate & Calculate| RequestCounts
+        MetricsEndpoint -->|Read| StatusCounts
+        MetricsEndpoint -->|Read| BusinessMetrics
+        MetricsEndpoint -->|Read & Calculate<br/>p50, p95, p99| Latencies
+        MetricsEndpoint -->|Read| ErrorCount
+        MetricsEndpoint --> JSON[JSON Response<br/>Aggregated Metrics]
+    end
+
+    subgraph "Structured Logging"
+        Metrics2 --> STDOUT[STDOUT<br/>JSON Logs]
+        STDOUT --> LogShipper[Log Shipper<br/>Fluentd/Vector]
+        LogShipper --> LogAggregator[Log Aggregator<br/>ELK/Splunk/Datadog]
+    end
+
+    style RateLimit fill:#FF6B6B
+    style Metrics fill:#4ECDC4
+    style Metrics2 fill:#4ECDC4
+    style RequestCounts fill:#FFE66D
+    style StatusCounts fill:#FFE66D
+    style BusinessMetrics fill:#FFE66D
+    style Latencies fill:#FFE66D
+    style RateLimitKeys fill:#FF6B6B
+    style MetricsEndpoint fill:#95E1D3
+
+    note1[Note: Redis ZSET for latencies keeps<br/>last 1000 samples per endpoint<br/>for percentile calculation]
+    note2[Note: All metrics have TTL of 1 hour<br/>Auto-cleanup with EXPIRE]
+    note3[Note: Sliding window rate limiting<br/>accurate at window boundaries]

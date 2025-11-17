@@ -1,0 +1,72 @@
+sequenceDiagram
+    participant Client
+    participant RateLimitMW as Rate Limit Middleware
+    participant MetricsMW as Metrics Middleware
+    participant API as FastAPI Routes
+    participant UC as RegisterUserUseCase
+    participant User as User Entity
+    participant Repo as PostgresRepository
+    participant DB as PostgreSQL
+    participant Queue as TaskQueue
+    participant Redis
+    participant Worker as Celery Worker
+    participant SMTP
+
+    Client->>RateLimitMW: POST /api/v1/users/register<br/>{"email": "user@example.com",<br/>"password": "SecurePass123"}
+
+    Note over RateLimitMW: Check rate limit<br/>5 requests/hour per IP
+    RateLimitMW->>Redis: ZREMRANGEBYSCORE<br/>ZCARD (count requests)
+    Redis-->>RateLimitMW: Allowed (under limit)
+    RateLimitMW->>Redis: ZADD (add request timestamp)
+
+    RateLimitMW->>MetricsMW: Forward request
+    Note over MetricsMW: Start timing request
+
+    MetricsMW->>API: Forward request
+    API->>API: Validate request (Pydantic)
+    API->>UC: execute(email, password)
+
+    UC->>Repo: find_by_email(email)
+    Repo->>DB: SELECT * FROM users<br/>WHERE email = $1
+    DB-->>Repo: None (user doesn't exist)
+    Repo-->>UC: None
+
+    UC->>User: create(email, password)
+    User->>User: validate_email()<br/>(regex check)
+    User->>User: validate_password()<br/>(min 8 chars)
+    User->>User: hash_password()<br/>(bcrypt, 12 rounds)
+    User->>User: generate_activation_code()<br/>(4-digit, 1000-9999)
+    User-->>UC: user instance
+
+    UC->>Repo: save(user)
+    Repo->>DB: INSERT INTO users<br/>(id, email, password_hash,<br/>activation_code, ...)
+    DB-->>Repo: OK
+    Repo-->>UC: user saved
+
+    UC->>Queue: enqueue_activation_email(email, code)
+    Queue->>Redis: Celery: publish task<br/>{email, code, template}
+    Redis-->>Queue: OK (task ID)
+    Queue-->>UC: task enqueued
+
+    UC-->>API: user
+    API-->>MetricsMW: 201 Created<br/>{"id": "...", "email": "...",<br/>"is_activated": false}
+
+    Note over MetricsMW: Calculate duration<br/>Store metrics in Redis
+    MetricsMW->>Redis: HINCRBY metrics:request_counts<br/>"POST /api/v1/users/register" 1
+    MetricsMW->>Redis: HINCRBY metrics:status_counts<br/>"201" 1
+    MetricsMW->>Redis: ZADD metrics:latencies:POST...<br/>timestamp:duration_ms
+    MetricsMW->>Redis: HINCRBY metrics:business<br/>"registrations" 1
+
+    MetricsMW-->>RateLimitMW: Response + metrics recorded
+    RateLimitMW-->>Client: 201 Created<br/>X-RateLimit-Limit: 5<br/>X-RateLimit-Remaining: 4<br/>{"id": "...", "is_activated": false}
+
+    Note over Redis,Worker: Async email processing<br/>(separate from API request)
+
+    Worker->>Redis: Celery: consume task
+    Redis-->>Worker: {email, code, template}
+    Worker->>Worker: Render email template<br/>(HTML + plain text)
+    Worker->>SMTP: SEND email<br/>Subject: Activate your account<br/>Body: Your code is XXXX
+    SMTP-->>Worker: 250 OK
+    Worker->>Redis: Task success (result)
+
+    Note over Client,SMTP: Key Design Decisions:<br/>1. Rate limit by IP (prevent bulk registration)<br/>2. Async email (fast API response ~200ms)<br/>3. Metrics in Redis (multi-worker aggregation)<br/>4. 4-digit code (user-friendly, 60s expiry)
