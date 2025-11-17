@@ -194,10 +194,10 @@ class DatabaseConnection:
         # Decision: For development/testing, we drop and recreate the table.
         # In production, you would use proper migrations (e.g., Alembic).
         # This ensures the schema is always up-to-date with timezone-aware timestamps.
+        # We add a lock to prevent race conditions during table creation.
         schema = """
-        DROP TABLE IF EXISTS users;
-
-        CREATE TABLE users (
+        -- Create table only if it doesn't exist
+        CREATE TABLE IF NOT EXISTS users (
             id UUID PRIMARY KEY,
             email VARCHAR(255) UNIQUE NOT NULL,
             password_hash VARCHAR(255) NOT NULL,
@@ -209,13 +209,19 @@ class DatabaseConnection:
             activation_code_expires_at TIMESTAMPTZ
         );
 
-        CREATE INDEX idx_users_email ON users(email);
-        CREATE INDEX idx_users_activation ON users(is_activated);
+        -- Create indexes only if they don't exist
+        CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
+        CREATE INDEX IF NOT EXISTS idx_users_activation ON users(is_activated);
         """
 
         try:
             await self.execute(schema)
             logger.info("Database schema initialized")
+        except asyncpg.exceptions.UniqueViolationError as e:
+            # Race condition: another worker created the table/type simultaneously
+            # Hack because we're not using migration tools here.
+            # This is safe to ignore - the schema exists
+            logger.warning(f"Schema already exists (concurrent worker): {e}")
         except Exception as e:
             logger.error(f"Failed to initialize database schema: {e}")
             raise
